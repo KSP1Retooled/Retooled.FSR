@@ -3,10 +3,10 @@ using System.Runtime.InteropServices;
 
 namespace Retooled.FSR;
 
-/// <summary>Declarations for RetooledFSR.dll, the native plugin in <c>Native~</c>.</summary>
+/// <summary>Declarations for Retooled.FSR.Native.dll, the native plugin in <c>Native~</c>.</summary>
 internal static class FsrNative
 {
-    const string Plugin = "RetooledFSR";
+    const string Plugin = "Retooled.FSR.Native";
 
     /// <summary>The number of frame slots in a native context, <c>FrameSlots</c> in Plugin.cpp.</summary>
     internal const int FrameSlots = 8;

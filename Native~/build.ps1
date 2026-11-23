@@ -1,4 +1,4 @@
-# Builds RetooledFSR.dll and the test harness. Needs CMake, Ninja, LLVM's clang-cl and the Windows SDK.
+# Builds Retooled.FSR.Native.dll and the test harness. Needs CMake, Ninja, LLVM's clang-cl and the Windows SDK.
 #
 #   build.ps1            builds the plugin and copies it into Plugins/x86_64
 #   build.ps1 -Test      also runs the harness, which needs a GPU with Direct3D 12
@@ -47,5 +47,5 @@ if ($Test) {
     if ($LASTEXITCODE -ne 0) { throw 'The harness failed' }
 }
 
-Copy-Item (Join-Path $build 'RetooledFSR.dll') $plugins -Force
-Write-Host "Copied RetooledFSR.dll to $(Resolve-Path $plugins)"
+Copy-Item (Join-Path $build 'Retooled.FSR.Native.dll') $plugins -Force
+Write-Host "Copied Retooled.FSR.Native.dll to $(Resolve-Path $plugins)"

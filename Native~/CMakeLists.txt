@@ -15,6 +15,7 @@ add_library(RetooledFSR SHARED src/Plugin.cpp)
 target_include_directories(RetooledFSR PRIVATE unity)
 target_compile_definitions(RetooledFSR PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(RetooledFSR PRIVATE FsrCore)
+set_target_properties(RetooledFSR PROPERTIES OUTPUT_NAME Retooled.FSR.Native)
 
 # Runs the same code on its own device, without Unity. See test/Harness.cpp.
 add_executable(FsrHarness test/Harness.cpp)

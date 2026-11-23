@@ -3,7 +3,7 @@
 AMD FSR upscaling and native anti-aliasing for Unity's built-in render pipeline on Windows x64.
 
 The package calls FSR through AMD's FSR API, from the FSR SDK 2.4.0. FSR records its work with the graphics API's
-own objects, which C# can't reach, so the package includes a small native plugin, `RetooledFSR.dll`, that Unity calls
+own objects, which C# can't reach, so the package includes a small native plugin, `Retooled.FSR.Native.dll`, that Unity calls
 on the render thread. The plugin loads AMD's `amd_fidelityfx_loader_dx12.dll` from its own folder and makes every SDK
 call there. `FsrContext` is the C# side.
 
@@ -95,7 +95,7 @@ Needs CMake, Ninja, LLVM's `clang-cl` and the Windows SDK. The plugin needs four
 Native~/build.ps1 -Test
 ```
 
-The script copies `RetooledFSR.dll` into `Plugins/x86_64`. Close the Unity editor first if it has loaded the plugin,
+The script copies `Retooled.FSR.Native.dll` into `Plugins/x86_64`. Close the Unity editor first if it has loaded the plugin,
 because it keeps the DLL open.
 
 `-Test` also runs `FsrHarness.exe`, which evaluates FSR at native resolution on a Direct3D 12 device of its own,

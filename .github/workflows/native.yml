@@ -1,0 +1,60 @@
+name: Native plug-in
+
+# Whenever the native plug-in's source changes, build Retooled.FSR.Native.dll and commit it to the branch that changed.
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'Native~/CMakeLists.txt'
+      - 'Native~/src/**'
+      - 'Native~/unity/**'
+      - 'Native~/fidelityfx/**'
+      - 'Native~/build.ps1'
+      - '.github/workflows/native.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch replaces an older run, so the binary always comes from the newest source.
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+
+      # Puts the Windows SDK, and the CMake and Ninja that come with Visual Studio, on the path for clang-cl.
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # The runner has no GPU, so the harness doesn't run here.
+      - name: Build
+        run: |
+          $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
+          Native~/build.ps1
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native
+          path: Plugins/x86_64/Retooled.FSR.Native.dll
+          retention-days: 7
+
+  commit:
+    needs: build
+    if: github.ref_type == 'branch'
+    permissions:
+      contents: write
+    uses: KSP1Retooled/upm/.github/workflows/commit-binaries.yml@main
+    with:
+      artifacts: native
+      path: Plugins/x86_64
