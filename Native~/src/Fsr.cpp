@@ -101,6 +101,13 @@ namespace fsr
         logFunction = log;
     }
 
+    void LogError(const char* message)
+    {
+        fsr::LogFunction* log = logFunction;
+        if (log != nullptr)
+            log(0, message);
+    }
+
     int32_t Create(void* device, const Options& options, void** upscaler)
     {
         *upscaler = nullptr;

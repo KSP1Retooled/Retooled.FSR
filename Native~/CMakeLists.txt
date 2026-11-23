@@ -7,7 +7,7 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
 
 # The FSR DLLs are loaded at runtime, so only the SDK's headers are needed here. The headers include each other by
 # relative path, so the fidelityfx folder keeps the SDK's layout.
-add_library(FsrCore STATIC src/Fsr.cpp)
+add_library(FsrCore STATIC src/Fsr.cpp src/Sidecar.cpp)
 target_include_directories(FsrCore PUBLIC src PRIVATE fidelityfx)
 target_compile_definitions(FsrCore PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 
@@ -20,4 +20,4 @@ set_target_properties(RetooledFSR PROPERTIES OUTPUT_NAME Retooled.FSR.Native)
 # Runs the same code on its own device, without Unity. See test/Harness.cpp.
 add_executable(FsrHarness test/Harness.cpp)
 target_compile_definitions(FsrHarness PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(FsrHarness PRIVATE FsrCore d3d12 dxgi)
+target_link_libraries(FsrHarness PRIVATE FsrCore d3d11 d3d12 dxgi)

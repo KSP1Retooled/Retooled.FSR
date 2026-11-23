@@ -17,7 +17,8 @@ public class FsrContextTests
 
     static readonly Vector2Int Size = new(640, 360);
 
-    static bool ExpectFsr => SystemInfo.graphicsDeviceType == GraphicsDeviceType.Direct3D12;
+    static bool ExpectFsr =>
+        SystemInfo.graphicsDeviceType is GraphicsDeviceType.Direct3D12 or GraphicsDeviceType.Direct3D11;
 
     [Test]
     public void StructsMatchTheNativeLayout()
@@ -34,7 +35,7 @@ public class FsrContextTests
         Assert.That(FsrContext.Renderer, Is.EqualTo(SystemInfo.graphicsDeviceType));
     }
 
-    // FSR runs on any GPU under Direct3D 12. Anywhere else the context has to fail with a reason.
+    // FSR runs on any GPU under Direct3D 12 or 11. Anywhere else the context has to fail with a reason.
     [UnityTest]
     public IEnumerator CreatesAContextOrReportsWhyNot()
     {
@@ -63,7 +64,7 @@ public class FsrContextTests
     {
         RequirePlugin();
         if (!ExpectFsr)
-            Assert.Ignore("FSR needs Direct3D 12");
+            Assert.Ignore("FSR needs Direct3D 12 or 11");
 
         const int frames = 8;
         var input = new Color(0.25f, 0.5f, 0.75f, 1f);

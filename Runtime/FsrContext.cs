@@ -10,8 +10,9 @@ namespace Retooled.FSR;
 /// render thread. Methods queue or record those events and return at once. <see cref="Status"/> shows what the
 /// render thread has done so far.
 ///
-/// Only Direct3D 12 is supported. On anything else the context fails and <see cref="Status"/> says why. The FSR API
-/// picks the FSR version for the GPU: FSR 4 on recent AMD GPUs and FSR 3.1 on everything else.
+/// Direct3D 12 and Direct3D 11 are supported. On Direct3D 11 the plugin runs FSR on a Direct3D 12 device of its own
+/// and copies the textures between the two devices. On anything else the context fails and <see cref="Status"/> says
+/// why. The FSR API picks the FSR version for the GPU: FSR 4 on recent AMD GPUs and FSR 3.1 on everything else.
 /// </remarks>
 public sealed class FsrContext : IDisposable
 {
@@ -72,8 +73,8 @@ public sealed class FsrContext : IDisposable
 
     /// <summary>Records the evaluation of one frame into a command buffer.</summary>
     /// <remarks>
-    /// The recorded commands hold this frame's inputs, so record them again every frame and execute them once. Unity
-    /// restores its own Direct3D 12 state afterwards.
+    /// The recorded commands hold this frame's inputs, so record them again every frame and execute them once. On
+    /// Direct3D 12, Unity restores its own state afterwards.
     /// </remarks>
     public void Evaluate(CommandBuffer target, in FsrFrame frame)
     {

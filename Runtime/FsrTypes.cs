@@ -20,8 +20,12 @@ public enum FsrResult
     /// <summary>amd_fidelityfx_loader_dx12.dll is not in the plugin's folder, or cannot be loaded.</summary>
     ErrorLibraryMissing = 1000,
 
-    /// <summary>The graphics API is not Direct3D 12, or Unity lacks the plugin interface for it.</summary>
+    /// <summary>The graphics API is not Direct3D 12 or 11, or Unity lacks the plugin interface for it.</summary>
     ErrorUnsupportedGraphicsApi = 1001,
+
+    /// <summary>On Direct3D 11, the Direct3D 12 device that runs FSR could not be set up.</summary>
+    /// <remarks>It needs Direct3D 12 and Direct3D 11.4, so Windows 10 or later. The log says which step failed.</remarks>
+    ErrorSidecarFailed = 1002,
 
     /// <summary>The step has not happened yet.</summary>
     NotRun = int.MaxValue,

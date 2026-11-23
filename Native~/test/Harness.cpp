@@ -1,10 +1,12 @@
-// Runs FSR through Fsr.h on a Direct3D 12 device that this program creates, without Unity.
+// Runs FSR through Fsr.h on a device that this program creates, without Unity.
 //
-//     FsrHarness [frames]
+//     FsrHarness [d3d12|d3d11] [frames]
 //
 // It fills a color texture with a pattern, evaluates FSR at native resolution on it for a number of frames, and reads
 // the output back. The exit code is zero when every step succeeded and the output is not blank. The FSR DLLs must be
 // next to the executable.
+//
+// On d3d11 the textures are on a Direct3D 11 device, typeless as Unity makes them, and FSR runs through Sidecar.h.
 
 #include <cfloat>
 #include <cstdint>
@@ -16,11 +18,13 @@
 #include <vector>
 
 #include <windows.h>
+#include <d3d11.h>
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
 #include "Fsr.h"
+#include "Sidecar.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -284,12 +288,102 @@ namespace
         // Every submit waited for the GPU, so nothing still uses the upscaler's textures.
         return Check("destroy", fsr::Destroy(upscaler)) && written;
     }
+
+    bool RunD3D11(uint32_t frames)
+    {
+        ComPtr<ID3D11Device> device;
+        ComPtr<ID3D11DeviceContext> context;
+        const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
+        if (!Check("D3D11CreateDevice", D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, levels,
+                2, D3D11_SDK_VERSION, &device, nullptr, &context)))
+            return false;
+
+        // Depth and motion stay zero, which is a still image at the far plane.
+        std::vector<uint32_t> pattern = Pattern();
+        std::vector<uint32_t> zeros(Width * Height);
+        auto create = [&](DXGI_FORMAT format, UINT bind, const void* pixels, ComPtr<ID3D11Texture2D>& texture)
+        {
+            D3D11_TEXTURE2D_DESC description{};
+            description.Width = Width;
+            description.Height = Height;
+            description.MipLevels = 1;
+            description.ArraySize = 1;
+            description.Format = format;
+            description.SampleDesc.Count = 1;
+            description.Usage = D3D11_USAGE_DEFAULT;
+            description.BindFlags = bind;
+            D3D11_SUBRESOURCE_DATA data{pixels, Width * 4, 0};
+            return device->CreateTexture2D(&description, &data, &texture);
+        };
+
+        const UINT read = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        ComPtr<ID3D11Texture2D> color, depth, motion, output;
+        if (!Check("color", create(DXGI_FORMAT_R8G8B8A8_TYPELESS, read, pattern.data(), color))
+            || !Check("depth", create(DXGI_FORMAT_R32_TYPELESS, read, zeros.data(), depth))
+            || !Check("motion", create(DXGI_FORMAT_R16G16_TYPELESS, read, zeros.data(), motion))
+            || !Check("output", create(
+                DXGI_FORMAT_R8G8B8A8_TYPELESS, read | D3D11_BIND_UNORDERED_ACCESS, zeros.data(), output)))
+            return false;
+
+        std::unique_ptr<fsr::Sidecar> sidecar = fsr::Sidecar::Create(device.Get());
+        std::printf("sidecar: %s\n", sidecar != nullptr ? "created" : "failed");
+        if (sidecar == nullptr)
+            return false;
+
+        fsr::SetLog(Log);
+        fsr::Options options{Width, Height, Width, Height, ContextFlags};
+        void* upscaler = nullptr;
+        if (!Check("create", fsr::Create(sidecar->Device(), options, &upscaler)))
+            return false;
+
+        fsr::Info info = fsr::Describe(upscaler);
+        std::printf("version: %s\n", info.version);
+        std::printf("video memory: %.1f MB\n", static_cast<double>(info.videoMemory) / (1024.0 * 1024.0));
+
+        // The sidecar doesn't wait for the GPU, so the frames overlap as they would in a game.
+        for (uint32_t i = 0; i < frames; i++)
+        {
+            fsr::Frame frame = NewFrame(i);
+            frame.color = color.Get();
+            frame.depth = depth.Get();
+            frame.motion = motion.Get();
+            frame.output = output.Get();
+            int32_t evaluated = sidecar->Evaluate(upscaler, frame);
+            if (i == 0 || evaluated != fsr::Ok)
+                std::printf("frame %u: evaluate %d\n", i, evaluated);
+            if (evaluated != fsr::Ok)
+                return false;
+        }
+
+        D3D11_TEXTURE2D_DESC stagingDescription{};
+        output->GetDesc(&stagingDescription);
+        stagingDescription.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        stagingDescription.Usage = D3D11_USAGE_STAGING;
+        stagingDescription.BindFlags = 0;
+        stagingDescription.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        ComPtr<ID3D11Texture2D> staging;
+        if (!Check("staging", device->CreateTexture2D(&stagingDescription, nullptr, &staging)))
+            return false;
+
+        // The copy waits on the GPU for the last evaluation, and the map waits on the CPU for the copy.
+        context->CopyResource(staging.Get(), output.Get());
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        if (!Check("map readback", context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))
+            || !Check("device", device->GetDeviceRemovedReason()))
+            return false;
+        bool written = CheckOutput(static_cast<const uint8_t*>(mapped.pData), mapped.RowPitch);
+        context->Unmap(staging.Get(), 0);
+
+        sidecar->WaitForIdle();
+        return Check("destroy", fsr::Destroy(upscaler)) && written;
+    }
 }
 
 int main(int argc, char** argv)
 {
-    uint32_t frames = argc > 1 ? static_cast<uint32_t>(std::atoi(argv[1])) : 16;
-    bool passed = Run(frames);
+    bool d3d11 = argc > 1 && std::strcmp(argv[1], "d3d11") == 0;
+    uint32_t frames = argc > 2 ? static_cast<uint32_t>(std::atoi(argv[2])) : 16;
+    bool passed = d3d11 ? RunD3D11(frames) : Run(frames);
     std::printf(passed ? "PASSED\n" : "FAILED\n");
     return passed ? 0 : 1;
 }

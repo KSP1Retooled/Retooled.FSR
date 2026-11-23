@@ -13,6 +13,8 @@ namespace fsr
     constexpr int32_t NotRun = INT32_MAX;
     constexpr int32_t ErrorLibraryMissing = 1000;
     constexpr int32_t ErrorUnsupportedGraphicsApi = 1001;
+    // The Direct3D 12 device that runs FSR next to a Direct3D 11 device could not be set up. See Sidecar.h.
+    constexpr int32_t ErrorSidecarFailed = 1002;
 
     // The type is an FfxApiMsgType: 0 for an error, 1 for a warning.
     using LogFunction = void(int32_t type, const char* message);
@@ -79,6 +81,9 @@ namespace fsr
 
     // Messages from the FSR API go to this function, which may be called from any thread. Null drops them.
     void SetLog(LogFunction* log);
+
+    // Sends an error of this module's own to the log function.
+    void LogError(const char* message);
 
     // Creates an upscaler on an ID3D12Device. The first call loads amd_fidelityfx_loader_dx12.dll from the folder of
     // this module. Creation compiles FSR's shaders, so it can take a moment.

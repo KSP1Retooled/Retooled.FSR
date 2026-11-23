@@ -1,7 +1,7 @@
 # Builds Retooled.FSR.Native.dll and the test harness. Needs CMake, Ninja, LLVM's clang-cl and the Windows SDK.
 #
 #   build.ps1            builds the plugin and copies it into Plugins/x86_64
-#   build.ps1 -Test      also runs the harness, which needs a GPU with Direct3D 12
+#   build.ps1 -Test      also runs the harness on Direct3D 12 and on Direct3D 11, which needs a GPU with Direct3D 12
 #
 # A Unity editor that has loaded the plugin keeps the DLL open, so close it before building.
 param(
@@ -43,8 +43,10 @@ if ($Test) {
     foreach ($name in 'amd_fidelityfx_loader_dx12.dll', 'amd_fidelityfx_upscaler_dx12.dll') {
         Copy-Item (Join-Path $plugins $name) $run -Force
     }
-    & (Join-Path $run 'FsrHarness.exe')
-    if ($LASTEXITCODE -ne 0) { throw 'The harness failed' }
+    foreach ($api in 'd3d12', 'd3d11') {
+        & (Join-Path $run 'FsrHarness.exe') $api
+        if ($LASTEXITCODE -ne 0) { throw "The harness failed on $api" }
+    }
 }
 
 Copy-Item (Join-Path $build 'Retooled.FSR.Native.dll') $plugins -Force

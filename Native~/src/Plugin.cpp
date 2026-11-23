@@ -1,19 +1,23 @@
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 
-// Unity's D3D12 header expects the Direct3D and DXGI types to be declared already.
+// Unity's Direct3D headers expect the Direct3D and DXGI types to be declared already.
 #include <windows.h>
+#include <d3d11.h>
 #include <d3d12.h>
 #include <dxgi.h>
 
 #include "Fsr.h"
 #include "IUnityGraphics.h"
+#include "IUnityGraphicsD3D11.h"
 #include "IUnityGraphicsD3D12.h"
 #include "IUnityInterface.h"
 #include "IUnityLog.h"
+#include "Sidecar.h"
 
 namespace
 {
@@ -78,7 +82,8 @@ namespace
     struct Retired
     {
         void* upscaler;
-        // The value that Unity's frame fence reaches when the GPU has finished the frame of the destroy event.
+        // The value that the device's fence reaches when the GPU has finished the upscaler's last frame: Unity's
+        // frame fence on Direct3D 12, or the sidecar's fence on Direct3D 11.
         uint64_t fenceValue;
     };
 
@@ -86,11 +91,17 @@ namespace
     IUnityGraphics* graphics;
     IUnityLog* unityLog;
     IUnityGraphicsD3D12v8* d3d12;
+    IUnityGraphicsD3D11* d3d11;
     UnityGfxRenderer renderer = kUnityGfxRendererNull;
     std::atomic<int32_t> logLevel{LogWarnings};
 
     // Used on the render thread only.
     std::vector<Retired> retired;
+
+    // On Direct3D 11, FSR runs on a Direct3D 12 device of its own. It is set up with the first context, so that a game
+    // that never uses FSR never creates the device. Used on the render thread only.
+    std::unique_ptr<fsr::Sidecar> sidecar;
+    bool sidecarTried;
 
     // The FSR API may call this from its own threads. Unity's log accepts messages from any thread.
     void OnLog(int32_t type, const char* message)
@@ -111,7 +122,11 @@ namespace
         if (retired.empty())
             return;
 
-        uint64_t completed = d3d12->GetFrameFence()->GetCompletedValue();
+        if (all && sidecar != nullptr)
+            sidecar->WaitForIdle();
+        uint64_t completed = d3d12 != nullptr ? d3d12->GetFrameFence()->GetCompletedValue()
+            : sidecar != nullptr ? sidecar->Completed()
+            : 0;
         std::erase_if(retired, [&](const Retired& entry)
         {
             if (!all && completed < entry.fenceValue)
@@ -127,18 +142,47 @@ namespace
         {
             renderer = graphics->GetRenderer();
             d3d12 = nullptr;
+            d3d11 = nullptr;
             // Version 8 is the first that lets a plugin ask Unity for a resource state.
+            // UNITY_GET_INTERFACE ends in a semicolon, so an else can't follow it.
             if (renderer == kUnityGfxRendererD3D12)
                 d3d12 = UNITY_GET_INTERFACE(interfaces, IUnityGraphicsD3D12v8);
+            if (renderer == kUnityGfxRendererD3D11)
+                d3d11 = UNITY_GET_INTERFACE(interfaces, IUnityGraphicsD3D11);
         }
         else if (type == kUnityGfxDeviceEventShutdown)
         {
-            // The upscalers hold textures of the device, so they go before it does.
-            if (d3d12 != nullptr)
-                Collect(true);
+            // The upscalers hold textures of the device, so they go before it does. The sidecar's shared textures
+            // belong to Unity's Direct3D 11 device too.
+            Collect(true);
+            sidecar.reset();
+            sidecarTried = false;
             renderer = kUnityGfxRendererNull;
             d3d12 = nullptr;
+            d3d11 = nullptr;
         }
+    }
+
+    // The device that upscalers are created on, or null with the reason in result.
+    ID3D12Device* UpscalerDevice(int32_t& result)
+    {
+        if (d3d12 != nullptr)
+            return d3d12->GetDevice();
+        if (d3d11 == nullptr)
+        {
+            result = fsr::ErrorUnsupportedGraphicsApi;
+            return nullptr;
+        }
+
+        if (!sidecarTried)
+        {
+            sidecarTried = true;
+            sidecar = fsr::Sidecar::Create(d3d11->GetDevice());
+            if (sidecar == nullptr)
+                fsr::LogError("cannot set up a Direct3D 12 device next to Unity's Direct3D 11 device");
+        }
+        result = fsr::ErrorSidecarFailed;
+        return sidecar != nullptr ? sidecar->Device() : nullptr;
     }
 
     void Create(Context& context)
@@ -149,12 +193,12 @@ namespace
             options = context.options;
         }
 
-        int32_t result = fsr::ErrorUnsupportedGraphicsApi;
+        fsr::SetLog(OnLog);
+        int32_t result = fsr::NotRun;
         fsr::Info info{};
-        if (d3d12 != nullptr)
+        if (ID3D12Device* device = UpscalerDevice(result))
         {
-            fsr::SetLog(OnLog);
-            result = fsr::Create(d3d12->GetDevice(), options, &context.upscaler);
+            result = fsr::Create(device, options, &context.upscaler);
             if (result == fsr::Ok)
                 info = fsr::Describe(context.upscaler);
         }
@@ -177,27 +221,36 @@ namespace
             frame = slot.frame;
         }
 
-        UnityGraphicsD3D12RecordingState recording{};
-        if (!d3d12->CommandRecordingState(&recording))
-            return;
+        int32_t result;
+        if (sidecar != nullptr)
+        {
+            result = sidecar->Evaluate(context.upscaler, frame);
+        }
+        else
+        {
+            UnityGraphicsD3D12RecordingState recording{};
+            if (!d3d12->CommandRecordingState(&recording))
+                return;
 
-        // Unity adds the barriers to its command list and tracks the new states. FSR returns the textures in these
-        // states.
-        const D3D12_RESOURCE_STATES read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-        d3d12->RequestResourceState(static_cast<ID3D12Resource*>(frame.color), read);
-        d3d12->RequestResourceState(static_cast<ID3D12Resource*>(frame.depth), read);
-        d3d12->RequestResourceState(static_cast<ID3D12Resource*>(frame.motion), read);
-        d3d12->RequestResourceState(static_cast<ID3D12Resource*>(frame.output), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-        int32_t result = fsr::Evaluate(context.upscaler, frame, recording.commandList);
+            // Unity adds the barriers to its command list and tracks the new states. FSR returns the textures in these
+            // states.
+            const D3D12_RESOURCE_STATES read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            d3d12->RequestResourceState(static_cast<ID3D12Resource*>(frame.color), read);
+            d3d12->RequestResourceState(static_cast<ID3D12Resource*>(frame.depth), read);
+            d3d12->RequestResourceState(static_cast<ID3D12Resource*>(frame.motion), read);
+            d3d12->RequestResourceState(
+                static_cast<ID3D12Resource*>(frame.output), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            result = fsr::Evaluate(context.upscaler, frame, recording.commandList);
+        }
 
         std::lock_guard lock(context.mutex);
         context.status.evaluateResult = result;
         context.status.evaluations++;
     }
 
-    // The command list that Unity is recording may hold this upscaler's passes, and FSR releases its textures as soon
-    // as the upscaler is destroyed. So the upscaler waits in the retired list until the GPU has finished this frame.
+    // The GPU may still be running this upscaler's passes, and FSR releases its textures as soon as the upscaler is
+    // destroyed. So the upscaler waits in the retired list until the GPU has finished them: on Direct3D 12, the frame
+    // that Unity is recording, and on Direct3D 11, the sidecar's last evaluation.
     //
     // Unity can send this event after the device's shutdown event when it quits. The device is gone by then, so the
     // upscaler is left to the end of the process.
@@ -205,6 +258,8 @@ namespace
     {
         if (context->upscaler != nullptr && d3d12 != nullptr)
             retired.push_back({context->upscaler, d3d12->GetNextFrameFenceValue()});
+        else if (context->upscaler != nullptr && sidecar != nullptr)
+            retired.push_back({context->upscaler, sidecar->Submitted()});
         delete context;
     }
 
@@ -222,8 +277,7 @@ namespace
             Destroy(static_cast<Context*>(data));
             break;
         case CollectEvent:
-            if (d3d12 != nullptr)
-                Collect(false);
+            Collect(false);
             break;
         default:
             break;

@@ -14,8 +14,9 @@ the version in this package with its own.
 ## Requirements
 
 - Direct3D 12, on a Unity version that has the `IUnityGraphicsD3D12v8` plugin interface. Any GPU vendor works.
-- Vulkan is not supported yet. The SDK has Vulkan DLLs, but the plugin doesn't use them. FSR doesn't run on
-  Direct3D 11, OpenGL, Linux or macOS.
+- Direct3D 11 also works on Windows 10 or later, through a Direct3D 12 device next to Unity's. See below.
+- Vulkan is not supported yet. The SDK has Vulkan DLLs, but the plugin doesn't use them. FSR doesn't run on OpenGL,
+  Linux or macOS.
 
 On anything else a context fails, and `context.Status` says why.
 
@@ -67,6 +68,11 @@ pass them yet.
   context's last frames. So the plugin keeps a disposed context until Unity's frame fence shows that those frames are
   done, and frees it then.
 - The FSR DLLs load when the first context is created. A game that never creates a context never loads them.
+- The FSR API has no Direct3D 11 backend. On Direct3D 11 the plugin creates a Direct3D 12 device on the same GPU
+  with the first context. Each frame it copies the inputs into textures that both devices share and signals a shared
+  fence. The Direct3D 12 queue waits for that fence, runs FSR and signals again. Unity's Direct3D 11 context waits
+  for that signal on the GPU, then copies the result back. The CPU waits for neither device, but the copies cost
+  some GPU time and four textures of video memory.
 - Unity 6000.7 ships its own, older `amd_fidelityfx_loader_dx12.dll` and `amd_fidelityfx_upscaler_dx12.dll` next to
   the editor and player executables. AMD's loader looks next to the executable before it looks in its own folder,
   so it would pair this package's loader with Unity's upscaler. The plugin loads this package's upscaler DLL first,
@@ -98,8 +104,8 @@ Native~/build.ps1 -Test
 The script copies `Retooled.FSR.Native.dll` into `Plugins/x86_64`. Close the Unity editor first if it has loaded the plugin,
 because it keeps the DLL open.
 
-`-Test` also runs `FsrHarness.exe`, which evaluates FSR at native resolution on a Direct3D 12 device of its own,
-without Unity.
+`-Test` also runs `FsrHarness.exe`, which evaluates FSR at native resolution on a device of its own, without Unity:
+once on Direct3D 12, and once on Direct3D 11 through the second device.
 
 ## Licenses
 
