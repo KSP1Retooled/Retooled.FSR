@@ -162,11 +162,10 @@ namespace fsr
         return info;
     }
 
-    void ListVersions(void* device, Info& info)
+    std::vector<std::string> ListVersions(void* device)
     {
-        info.versions[0] = '\0';
         if (!library.loaded)
-            return;
+            return {};
 
         ffxQueryDescGetVersions query{};
         query.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
@@ -175,25 +174,21 @@ namespace fsr
         uint64_t count = 0;
         query.outputCount = &count;
         if (library.Query(nullptr, &query.header) != FFX_API_RETURN_OK || count == 0)
-            return;
+            return {};
 
         std::vector<const char*> names(count, nullptr);
         query.versionNames = names.data();
         if (library.Query(nullptr, &query.header) != FFX_API_RETURN_OK)
-            return;
+            return {};
 
-        std::string list;
-        for (uint64_t i = 0; i < count; i++)
+        std::vector<std::string> versions;
+        for (const char* name : names)
         {
-            if (names[i] == nullptr)
-                continue;
-
-            if (!list.empty())
-                list += ", ";
-            list += names[i];
+            if (name != nullptr)
+                versions.emplace_back(name);
         }
 
-        strncpy_s(info.versions, list.c_str(), _TRUNCATE);
+        return versions;
     }
 
     int32_t Evaluate(void* upscaler, const Frame& frame, void* commandList)

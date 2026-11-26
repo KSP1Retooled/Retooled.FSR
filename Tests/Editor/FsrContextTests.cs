@@ -25,7 +25,7 @@ public class FsrContextTests
     {
         Assert.That(Marshal.SizeOf<FsrNative.Options>(), Is.EqualTo(5 * sizeof(int)));
         Assert.That(Marshal.SizeOf<FsrNative.Frame>(), Is.EqualTo(4 * 8 + 15 * sizeof(int) + 4));
-        Assert.That(Marshal.SizeOf<FsrNative.Status>(), Is.EqualTo(4 * sizeof(int) + sizeof(ulong) + 32 + 128));
+        Assert.That(Marshal.SizeOf<FsrNative.Status>(), Is.EqualTo(4 * sizeof(int) + sizeof(ulong) + 32));
     }
 
     [Test]
@@ -49,7 +49,7 @@ public class FsrContextTests
         {
             Assert.That(status.Stage, Is.EqualTo(FsrStage.Ready), status.ToString());
             Assert.That(status.Version, Is.Not.Empty);
-            Assert.That(status.Versions, Does.Contain(status.Version.TrimEnd(' ', '*')));
+            Assert.That(context.Versions, Does.Contain(status.Version.TrimEnd(' ', '*')));
             Assert.That(status.VideoMemory, Is.GreaterThan(0));
         }
         else

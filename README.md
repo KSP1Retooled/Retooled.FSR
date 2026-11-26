@@ -8,7 +8,7 @@ on the render thread. The plugin loads AMD's `amd_fidelityfx_loader_dx12.dll` fr
 call there. `FsrContext` is the C# side.
 
 The FSR API picks the FSR version for the GPU. Recent AMD GPUs get FSR 4, which uses machine learning. Every other
-GPU gets FSR 3.1. `context.Status.Version` says which one is running, and `context.Status.Versions` lists every
+GPU gets FSR 3.1. `context.Status.Version` says which one is running, and `context.Versions` lists every
 version the API offers for the GPU. A newer AMD graphics driver can also replace the version in this package with its
 own.
 

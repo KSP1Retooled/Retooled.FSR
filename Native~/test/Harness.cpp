@@ -63,9 +63,10 @@ namespace
 
     void PrintVersions(void* device)
     {
-        fsr::Info info{};
-        fsr::ListVersions(device, info);
-        std::printf("versions offered: %s\n", info.versions);
+        std::printf("versions offered:");
+        for (const std::string& version : fsr::ListVersions(device))
+            std::printf(" %s", version.c_str());
+        std::printf("\n");
     }
 
     float Halton(uint32_t index, uint32_t radix)

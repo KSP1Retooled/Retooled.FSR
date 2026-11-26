@@ -73,6 +73,8 @@ namespace
     {
         std::mutex mutex;
         Status status;
+        // The FSR versions that the API offers for the device. Set with the status when the context leaves Pending.
+        std::vector<std::string> versions;
         fsr::Options options{};
         void* upscaler = nullptr;
         FrameSlot slots[FrameSlots]{};
@@ -196,17 +198,19 @@ namespace
         fsr::SetLog(OnLog);
         int32_t result = fsr::NotRun;
         fsr::Info info{};
+        std::vector<std::string> versions;
         if (ID3D12Device* device = UpscalerDevice(result))
         {
             result = fsr::Create(device, options, &context.upscaler);
             if (result == fsr::Ok)
                 info = fsr::Describe(context.upscaler);
-            fsr::ListVersions(device, info);
+            versions = fsr::ListVersions(device);
         }
 
         std::lock_guard lock(context.mutex);
         context.status.createResult = result;
         context.status.info = info;
+        context.versions = std::move(versions);
         context.status.stage = result == fsr::Ok ? Stage::Ready : Stage::Failed;
     }
 
@@ -333,6 +337,17 @@ extern "C"
     {
         std::lock_guard lock(context->mutex);
         *status = context->status;
+    }
+
+    // Writes up to capacity of the versions that the API offers into names and returns how many it offers. The names
+    // stay valid until the context is destroyed.
+    UNITY_INTERFACE_EXPORT int32_t RetooledFSR_GetVersions(Context* context, const char** names, int32_t capacity)
+    {
+        std::lock_guard lock(context->mutex);
+        int32_t count = static_cast<int32_t>(context->versions.size());
+        for (int32_t i = 0; i < count && i < capacity; i++)
+            names[i] = context->versions[i].c_str();
+        return count;
     }
 
     // Stores a frame's inputs in a slot and returns the slot, which is the data of that frame's evaluate event.

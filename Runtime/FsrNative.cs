@@ -68,9 +68,6 @@ internal static class FsrNative
 
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
         public string Version;
-
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-        public string Versions;
     }
 
     [DllImport(Plugin)]
@@ -87,6 +84,11 @@ internal static class FsrNative
 
     [DllImport(Plugin)]
     internal static extern void RetooledFSR_GetStatus(IntPtr context, out Status status);
+
+    /// <summary>Writes up to <paramref name="capacity"/> version names into <paramref name="names"/> and returns how many
+    /// there are. The names stay valid until the context is destroyed.</summary>
+    [DllImport(Plugin)]
+    internal static extern int RetooledFSR_GetVersions(IntPtr context, [Out] IntPtr[] names, int capacity);
 
     /// <summary>Returns the slot that holds the frame, which is the data of that frame's evaluate event.</summary>
     [DllImport(Plugin)]
