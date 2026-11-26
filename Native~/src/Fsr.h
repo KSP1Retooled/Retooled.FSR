@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 // FSR upscaling through AMD's FSR API on Direct3D 12, without anything from Unity. Plugin.cpp calls this from Unity's
 // render thread, and the test harness calls it on a device that it creates itself.
@@ -90,6 +92,10 @@ namespace fsr
     int32_t Create(void* device, const Options& options, void** upscaler);
 
     Info Describe(void* upscaler);
+
+    // Every FSR version that the API offers for an ID3D12Device, in the API's order, or none if the API didn't load.
+    // Call it after Create, which loads the API, whether or not Create succeeded.
+    std::vector<std::string> ListVersions(void* device);
 
     // Records the FSR passes into an ID3D12GraphicsCommandList. FSR binds its own descriptor heaps, root signature and
     // pipeline, and the caller restores the command list's state afterwards.

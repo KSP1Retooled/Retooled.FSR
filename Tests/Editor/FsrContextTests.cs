@@ -49,6 +49,7 @@ public class FsrContextTests
         {
             Assert.That(status.Stage, Is.EqualTo(FsrStage.Ready), status.ToString());
             Assert.That(status.Version, Is.Not.Empty);
+            Assert.That(context.Versions, Does.Contain(status.Version.TrimEnd(' ', '*')));
             Assert.That(status.VideoMemory, Is.GreaterThan(0));
         }
         else

@@ -4,6 +4,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include <windows.h>
 #include <d3d12.h>
@@ -159,6 +160,35 @@ namespace fsr
         if (library.Query(&context, &memory.header) == FFX_API_RETURN_OK)
             info.videoMemory = usage.totalUsageInBytes;
         return info;
+    }
+
+    std::vector<std::string> ListVersions(void* device)
+    {
+        if (!library.loaded)
+            return {};
+
+        ffxQueryDescGetVersions query{};
+        query.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+        query.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
+        query.device = device;
+        uint64_t count = 0;
+        query.outputCount = &count;
+        if (library.Query(nullptr, &query.header) != FFX_API_RETURN_OK || count == 0)
+            return {};
+
+        std::vector<const char*> names(count, nullptr);
+        query.versionNames = names.data();
+        if (library.Query(nullptr, &query.header) != FFX_API_RETURN_OK)
+            return {};
+
+        std::vector<std::string> versions;
+        for (const char* name : names)
+        {
+            if (name != nullptr)
+                versions.emplace_back(name);
+        }
+
+        return versions;
     }
 
     int32_t Evaluate(void* upscaler, const Frame& frame, void* commandList)

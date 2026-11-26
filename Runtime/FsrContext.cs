@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -23,6 +25,8 @@ public sealed class FsrContext : IDisposable
     IntPtr native;
 
     int frames;
+
+    string[] versions;
 
     /// <summary>Queues the creation of a context.</summary>
     /// <remarks>Creation loads the FSR DLLs and compiles FSR's shaders on the render thread.</remarks>
@@ -68,6 +72,30 @@ public sealed class FsrContext : IDisposable
             ThrowIfDisposed();
             FsrNative.RetooledFSR_GetStatus(native, out FsrNative.Status status);
             return new FsrStatus(status);
+        }
+    }
+
+    /// <summary>
+    /// Every FSR version that the API offers for the GPU, newest first, such as "4.1.2" and "3.1.5". Empty while the
+    /// context is pending, and if the FSR DLLs didn't load.
+    /// </summary>
+    /// <remarks>An AMD GPU without FSR 4 in this list needs a newer graphics driver, or doesn't support FSR 4.</remarks>
+    public IReadOnlyList<string> Versions
+    {
+        get
+        {
+            ThrowIfDisposed();
+            if (versions != null)
+                return versions;
+
+            // The render thread sets the versions together with the stage, and never changes them after.
+            if (Status.Stage == FsrStage.Pending)
+                return Array.Empty<string>();
+
+            var names = new IntPtr[FsrNative.RetooledFSR_GetVersions(native, null, 0)];
+            FsrNative.RetooledFSR_GetVersions(native, names, names.Length);
+            versions = Array.ConvertAll(names, Marshal.PtrToStringAnsi);
+            return versions;
         }
     }
 
