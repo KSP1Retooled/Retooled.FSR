@@ -201,6 +201,7 @@ namespace
             result = fsr::Create(device, options, &context.upscaler);
             if (result == fsr::Ok)
                 info = fsr::Describe(context.upscaler);
+            fsr::ListVersions(device, info);
         }
 
         std::lock_guard lock(context.mutex);

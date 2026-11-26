@@ -61,6 +61,13 @@ namespace
         return SUCCEEDED(result);
     }
 
+    void PrintVersions(void* device)
+    {
+        fsr::Info info{};
+        fsr::ListVersions(device, info);
+        std::printf("versions offered: %s\n", info.versions);
+    }
+
     float Halton(uint32_t index, uint32_t radix)
     {
         float result = 0.0f;
@@ -253,7 +260,9 @@ namespace
         fsr::SetLog(Log);
         fsr::Options options{Width, Height, Width, Height, ContextFlags};
         void* upscaler = nullptr;
-        if (!Check("create", fsr::Create(gpu.device.Get(), options, &upscaler)))
+        int32_t created = fsr::Create(gpu.device.Get(), options, &upscaler);
+        PrintVersions(gpu.device.Get());
+        if (!Check("create", created))
             return false;
 
         fsr::Info info = fsr::Describe(upscaler);
@@ -333,7 +342,9 @@ namespace
         fsr::SetLog(Log);
         fsr::Options options{Width, Height, Width, Height, ContextFlags};
         void* upscaler = nullptr;
-        if (!Check("create", fsr::Create(sidecar->Device(), options, &upscaler)))
+        int32_t created = fsr::Create(sidecar->Device(), options, &upscaler);
+        PrintVersions(sidecar->Device());
+        if (!Check("create", created))
             return false;
 
         fsr::Info info = fsr::Describe(upscaler);

@@ -68,6 +68,9 @@ internal static class FsrNative
 
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
         public string Version;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string Versions;
     }
 
     [DllImport(Plugin)]

@@ -179,6 +179,13 @@ public readonly struct FsrStatus
     /// </remarks>
     public readonly string Version;
 
+    /// <summary>
+    /// Every FSR version that the API offers for the GPU, separated by commas, such as "4.1.2, 3.1.5". Empty until
+    /// the context has started or failed, and if the FSR DLLs didn't load.
+    /// </summary>
+    /// <remarks>An AMD GPU without FSR 4 in this list needs a newer graphics driver, or doesn't support FSR 4.</remarks>
+    public readonly string Versions;
+
     internal FsrStatus(in FsrNative.Status status)
     {
         Stage = status.Stage;
@@ -187,9 +194,10 @@ public readonly struct FsrStatus
         Evaluations = (int)status.Evaluations;
         VideoMemory = (long)status.VideoMemory;
         Version = status.Version ?? "";
+        Versions = status.Versions ?? "";
     }
 
     public override string ToString() =>
         $"stage {Stage}, create {CreateResult}, evaluate {EvaluateResult}, {Evaluations} evaluations, "
-        + $"FSR {Version}, {VideoMemory / (1024.0 * 1024.0):F1} MB";
+        + $"FSR {Version} of {Versions}, {VideoMemory / (1024.0 * 1024.0):F1} MB";
 }

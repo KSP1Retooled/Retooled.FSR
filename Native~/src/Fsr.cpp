@@ -4,6 +4,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include <windows.h>
 #include <d3d12.h>
@@ -159,6 +160,40 @@ namespace fsr
         if (library.Query(&context, &memory.header) == FFX_API_RETURN_OK)
             info.videoMemory = usage.totalUsageInBytes;
         return info;
+    }
+
+    void ListVersions(void* device, Info& info)
+    {
+        info.versions[0] = '\0';
+        if (!library.loaded)
+            return;
+
+        ffxQueryDescGetVersions query{};
+        query.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+        query.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
+        query.device = device;
+        uint64_t count = 0;
+        query.outputCount = &count;
+        if (library.Query(nullptr, &query.header) != FFX_API_RETURN_OK || count == 0)
+            return;
+
+        std::vector<const char*> names(count, nullptr);
+        query.versionNames = names.data();
+        if (library.Query(nullptr, &query.header) != FFX_API_RETURN_OK)
+            return;
+
+        std::string list;
+        for (uint64_t i = 0; i < count; i++)
+        {
+            if (names[i] == nullptr)
+                continue;
+
+            if (!list.empty())
+                list += ", ";
+            list += names[i];
+        }
+
+        strncpy_s(info.versions, list.c_str(), _TRUNCATE);
     }
 
     int32_t Evaluate(void* upscaler, const Frame& frame, void* commandList)
