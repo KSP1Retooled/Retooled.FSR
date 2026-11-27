@@ -15,6 +15,7 @@
 #include "IUnityGraphics.h"
 #include "IUnityGraphicsD3D11.h"
 #include "IUnityGraphicsD3D12.h"
+#include "IUnityGraphicsVulkan.h"
 #include "IUnityInterface.h"
 #include "IUnityLog.h"
 #include "Sidecar.h"
@@ -85,7 +86,8 @@ namespace
     {
         void* upscaler;
         // The value that the device's fence reaches when the GPU has finished the upscaler's last frame: Unity's
-        // frame fence on Direct3D 12, or the sidecar's fence on Direct3D 11.
+        // frame fence on Direct3D 12, or the sidecar's fence on Direct3D 11. On Vulkan it is the number of the frame
+        // that Unity was recording, which Unity's safe frame number reaches when the GPU has finished it.
         uint64_t fenceValue;
     };
 
@@ -94,6 +96,8 @@ namespace
     IUnityLog* unityLog;
     IUnityGraphicsD3D12v8* d3d12;
     IUnityGraphicsD3D11* d3d11;
+    IUnityGraphicsVulkanV2* vulkan;
+    fsr::VulkanDevice vulkanDevice{};
     UnityGfxRenderer renderer = kUnityGfxRendererNull;
     std::atomic<int32_t> logLevel{LogWarnings};
 
@@ -118,6 +122,20 @@ namespace
         unityLog->Log(error ? kUnityLogTypeError : kUnityLogTypeWarning, text.c_str(), "", 0);
     }
 
+    // The frame that Unity is recording on Vulkan, and the newest frame that the GPU has finished. Outside a plugin
+    // event Unity has no recording state to give, and the last values stand.
+    uint64_t vulkanCurrentFrame;
+    uint64_t vulkanSafeFrame;
+
+    void ReadVulkanFrames()
+    {
+        UnityVulkanRecordingState recording{};
+        if (!vulkan->CommandRecordingState(&recording, kUnityVulkanGraphicsQueueAccess_DontCare))
+            return;
+        vulkanCurrentFrame = recording.currentFrameNumber;
+        vulkanSafeFrame = recording.safeFrameNumber;
+    }
+
     // Destroys the retired upscalers that the GPU has finished with, or all of them.
     void Collect(bool all)
     {
@@ -126,8 +144,11 @@ namespace
 
         if (all && sidecar != nullptr)
             sidecar->WaitForIdle();
+        if (vulkan != nullptr && !all)
+            ReadVulkanFrames();
         uint64_t completed = d3d12 != nullptr ? d3d12->GetFrameFence()->GetCompletedValue()
             : sidecar != nullptr ? sidecar->Completed()
+            : vulkan != nullptr ? vulkanSafeFrame
             : 0;
         std::erase_if(retired, [&](const Retired& entry)
         {
@@ -136,6 +157,23 @@ namespace
             fsr::Destroy(entry.upscaler);
             return true;
         });
+    }
+
+    void SetUpVulkan()
+    {
+        UnityVulkanInstance instance = vulkan->Instance();
+        auto getDeviceProcAddr = instance.getInstanceProcAddr(instance.instance, "vkGetDeviceProcAddr");
+        vulkanDevice = {instance.device, instance.physicalDevice, reinterpret_cast<void*>(getDeviceProcAddr)};
+        vulkanCurrentFrame = 0;
+        vulkanSafeFrame = 0;
+
+        // FSR dispatches compute work, which can't happen inside a render pass, and binds its own state.
+        UnityVulkanPluginEventConfig config{};
+        config.renderPassPrecondition = kUnityVulkanRenderPass_EnsureOutside;
+        config.graphicsQueueAccess = kUnityVulkanGraphicsQueueAccess_DontCare;
+        config.flags = kUnityVulkanEventConfigFlag_EnsurePreviousFrameSubmission
+            | kUnityVulkanEventConfigFlag_ModifiesCommandBuffersState;
+        vulkan->ConfigureEvent(EvaluateEvent, &config);
     }
 
     void UNITY_INTERFACE_API OnGraphicsDeviceEvent(UnityGfxDeviceEventType type)
@@ -151,6 +189,11 @@ namespace
                 d3d12 = UNITY_GET_INTERFACE(interfaces, IUnityGraphicsD3D12v8);
             if (renderer == kUnityGfxRendererD3D11)
                 d3d11 = UNITY_GET_INTERFACE(interfaces, IUnityGraphicsD3D11);
+            vulkan = nullptr;
+            if (renderer == kUnityGfxRendererVulkan)
+                vulkan = UNITY_GET_INTERFACE(interfaces, IUnityGraphicsVulkanV2);
+            if (vulkan != nullptr)
+                SetUpVulkan();
         }
         else if (type == kUnityGfxDeviceEventShutdown)
         {
@@ -162,6 +205,7 @@ namespace
             renderer = kUnityGfxRendererNull;
             d3d12 = nullptr;
             d3d11 = nullptr;
+            vulkan = nullptr;
         }
     }
 
@@ -199,7 +243,14 @@ namespace
         int32_t result = fsr::NotRun;
         fsr::Info info{};
         std::vector<std::string> versions;
-        if (ID3D12Device* device = UpscalerDevice(result))
+        if (vulkan != nullptr)
+        {
+            result = fsr::CreateVulkan(vulkanDevice, options, &context.upscaler);
+            if (result == fsr::Ok)
+                info = fsr::Describe(context.upscaler);
+            versions = fsr::ListVersionsVulkan(vulkanDevice);
+        }
+        else if (ID3D12Device* device = UpscalerDevice(result))
         {
             result = fsr::Create(device, options, &context.upscaler);
             if (result == fsr::Ok)
@@ -212,6 +263,48 @@ namespace
         context.status.info = info;
         context.versions = std::move(versions);
         context.status.stage = result == fsr::Ok ? Stage::Ready : Stage::Failed;
+    }
+
+    // Has Unity move a texture into the layout that FSR expects, with a barrier in the command buffer it is recording.
+    bool AccessImage(void* texture, VkImageLayout layout, VkAccessFlags access, fsr::VulkanImage& image)
+    {
+        UnityVulkanImage unityImage{};
+        VkImageSubresource subresource{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0};
+        if (!vulkan->AccessTexture(texture, &subresource, layout, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, access,
+            kUnityVulkanResourceAccess_PipelineBarrier, &unityImage))
+            return false;
+
+        image.image = unityImage.image;
+        image.format = static_cast<uint32_t>(unityImage.format);
+        image.usage = unityImage.usage;
+        image.width = unityImage.extent.width;
+        image.height = unityImage.extent.height;
+        image.mipLevels = static_cast<uint32_t>(unityImage.mipCount);
+        image.layers = static_cast<uint32_t>(unityImage.layers);
+        return true;
+    }
+
+    int32_t EvaluateVulkan(void* upscaler, const fsr::Frame& frame)
+    {
+        const VkImageLayout readLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        const VkAccessFlags read = VK_ACCESS_SHADER_READ_BIT;
+        fsr::VulkanImage color{};
+        fsr::VulkanImage depth{};
+        fsr::VulkanImage motion{};
+        fsr::VulkanImage output{};
+        if (!AccessImage(frame.color, readLayout, read, color)
+            || !AccessImage(frame.depth, readLayout, read, depth)
+            || !AccessImage(frame.motion, readLayout, read, motion)
+            || !AccessImage(frame.output, VK_IMAGE_LAYOUT_GENERAL, read | VK_ACCESS_SHADER_WRITE_BIT, output))
+            return fsr::ErrorTextureAccess;
+
+        // Accessing textures may record barriers, so the recording state is read afterwards.
+        UnityVulkanRecordingState recording{};
+        if (!vulkan->CommandRecordingState(&recording, kUnityVulkanGraphicsQueueAccess_DontCare))
+            return fsr::NotRun;
+        vulkanCurrentFrame = recording.currentFrameNumber;
+        vulkanSafeFrame = recording.safeFrameNumber;
+        return fsr::EvaluateVulkan(upscaler, frame, color, depth, motion, output, recording.commandBuffer);
     }
 
     void Evaluate(const FrameSlot& slot)
@@ -227,7 +320,13 @@ namespace
         }
 
         int32_t result;
-        if (sidecar != nullptr)
+        if (vulkan != nullptr)
+        {
+            result = EvaluateVulkan(context.upscaler, frame);
+            if (result == fsr::NotRun)
+                return;
+        }
+        else if (sidecar != nullptr)
         {
             result = sidecar->Evaluate(context.upscaler, frame);
         }
@@ -254,8 +353,8 @@ namespace
     }
 
     // The GPU may still be running this upscaler's passes, and FSR releases its textures as soon as the upscaler is
-    // destroyed. So the upscaler waits in the retired list until the GPU has finished them: on Direct3D 12, the frame
-    // that Unity is recording, and on Direct3D 11, the sidecar's last evaluation.
+    // destroyed. So the upscaler waits in the retired list until the GPU has finished them: on Direct3D 12 and Vulkan,
+    // the frame that Unity is recording, and on Direct3D 11, the sidecar's last evaluation.
     //
     // Unity can send this event after the device's shutdown event when it quits. The device is gone by then, so the
     // upscaler is left to the end of the process.
@@ -265,6 +364,11 @@ namespace
             retired.push_back({context->upscaler, d3d12->GetNextFrameFenceValue()});
         else if (context->upscaler != nullptr && sidecar != nullptr)
             retired.push_back({context->upscaler, sidecar->Submitted()});
+        else if (context->upscaler != nullptr && vulkan != nullptr)
+        {
+            ReadVulkanFrames();
+            retired.push_back({context->upscaler, vulkanCurrentFrame});
+        }
         delete context;
     }
 

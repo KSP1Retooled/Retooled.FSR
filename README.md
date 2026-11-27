@@ -4,8 +4,8 @@ AMD FSR upscaling and native anti-aliasing for Unity's built-in render pipeline 
 
 The package calls FSR through AMD's FSR API, from the FSR SDK 2.4.0. FSR records its work with the graphics API's
 own objects, which C# can't reach, so the package includes a small native plugin, `Retooled.FSR.Native.dll`, that Unity calls
-on the render thread. The plugin loads AMD's `amd_fidelityfx_loader_dx12.dll` from its own folder and makes every SDK
-call there. `FsrContext` is the C# side.
+on the render thread. The plugin loads AMD's `amd_fidelityfx_loader_dx12.dll`, or `amd_fidelityfx_loader_vk.dll` on
+Vulkan, from its own folder and makes every SDK call there. `FsrContext` is the C# side.
 
 The FSR API picks the FSR version for the GPU. Recent AMD GPUs get FSR 4, which uses machine learning. Every other
 GPU gets FSR 3.1. `context.Status.Version` says which one is running, and `context.Versions` lists every
@@ -16,8 +16,8 @@ own.
 
 - Direct3D 12, on a Unity version that has the `IUnityGraphicsD3D12v8` plugin interface. Any GPU vendor works.
 - Direct3D 11 also works on Windows 10 or later, through a Direct3D 12 device next to Unity's. See below.
-- Vulkan is not supported yet. The SDK has Vulkan DLLs, but the plugin doesn't use them. FSR doesn't run on OpenGL,
-  Linux or macOS.
+- Vulkan also works, with AMD's Vulkan DLLs. FSR asks nothing special of the Vulkan device.
+- FSR doesn't run on OpenGL, Linux or macOS.
 
 On anything else a context fails, and `context.Status` says why.
 
@@ -90,13 +90,17 @@ pass them yet.
 
 ## Building the plugin
 
-Needs CMake, Ninja, LLVM's `clang-cl` and the Windows SDK. The plugin needs four headers from the SDK's
-`Kits/FidelityFX` folder, at the same paths under `Native~/fidelityfx`:
+Needs CMake, Ninja, LLVM's `clang-cl`, the Windows SDK and the Vulkan headers, from the Vulkan SDK or from a checkout
+of KhronosGroup/Vulkan-Headers passed as `-VulkanInclude <its include folder>`. The plugin needs five headers from
+the SDK's `Kits/FidelityFX` folder, at the same paths under `Native~/fidelityfx`:
 
 - `api/include/ffx_api.h`
 - `api/include/ffx_api_types.h`
 - `api/include/dx12/ffx_api_dx12.h`
+- `api/include/vk/ffx_api_vk.h`
 - `upscalers/include/ffx_upscale.h`
+
+AMD's dx12 and vk headers declare the same names differently, so `Fsr.cpp` includes one and `FsrVulkan.cpp` the other.
 
 ```powershell
 Native~/build.ps1 -Test
@@ -110,7 +114,7 @@ once on Direct3D 12, and once on Direct3D 11 through the second device.
 
 ## Licenses
 
-- `amd_fidelityfx_loader_dx12.dll` and `amd_fidelityfx_upscaler_dx12.dll` in `Plugins/x86_64` are AMD's signed
+- The `amd_fidelityfx_loader` and `amd_fidelityfx_upscaler` DLLs in `Plugins/x86_64`, for dx12 and vk, are AMD's signed
   builds from the SDK's `Kits/FidelityFX/signedbin` folder. They and the headers in `Native~/fidelityfx` are under
   the MIT license in `Native~/fidelityfx/license.md`. AMD requires applications to call the FSR API through its
   signed DLLs.
