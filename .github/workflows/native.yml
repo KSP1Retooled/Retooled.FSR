@@ -22,6 +22,10 @@ concurrency:
   group: native-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # The plug-in only needs the Vulkan headers, so it builds against Khronos' header repository instead of the SDK.
+  VULKAN_HEADERS: v1.4.363
+
 jobs:
   build:
     name: Build
@@ -37,11 +41,15 @@ jobs:
         with:
           arch: x64
 
+      - name: Get the Vulkan headers
+        run: |
+          git clone --quiet --depth 1 --branch $env:VULKAN_HEADERS https://github.com/KhronosGroup/Vulkan-Headers.git "$env:RUNNER_TEMP/vulkan-headers"
+
       # The runner has no GPU, so the harness doesn't run here.
       - name: Build
         run: |
           $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
-          Native~/build.ps1
+          Native~/build.ps1 -VulkanInclude "$env:RUNNER_TEMP/vulkan-headers/include"
 
       - uses: actions/upload-artifact@v7
         with:

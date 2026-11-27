@@ -9,21 +9,12 @@
 #include <windows.h>
 #include <d3d12.h>
 
+#include "FsrLibrary.h"
 #include "api/include/dx12/ffx_api_dx12.h"
-#include "upscalers/include/ffx_upscale.h"
 
 namespace
 {
-    struct Library
-    {
-        PfnFfxCreateContext CreateContext = nullptr;
-        PfnFfxDestroyContext DestroyContext = nullptr;
-        PfnFfxQuery Query = nullptr;
-        PfnFfxDispatch Dispatch = nullptr;
-        bool loaded = false;
-    };
-
-    Library library;
+    fsr::Library library;
     std::once_flag loadOnce;
     std::atomic<fsr::LogFunction*> logFunction{nullptr};
 
@@ -59,14 +50,16 @@ namespace
     // The loader DLL uses an upscaler DLL that is already loaded, then looks next to the application's executable, and
     // only then in its own folder. Unity ships an older upscaler DLL next to its executables, so the one in the folder
     // of this module is loaded first. The loader then finds it by name and the two versions match.
-    void Load()
+    //
+    // AMD builds the DLLs once per graphics API, with the API as the suffix of their names: dx12 or vk.
+    void Load(const wchar_t* api)
     {
         std::wstring directory = ModuleDirectory();
-        std::wstring upscaler = directory + L"amd_fidelityfx_upscaler_dx12.dll";
+        std::wstring upscaler = directory + L"amd_fidelityfx_upscaler_" + api + L".dll";
         if (LoadLibraryExW(upscaler.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH) == nullptr)
             return;
 
-        std::wstring path = directory + L"amd_fidelityfx_loader_dx12.dll";
+        std::wstring path = directory + L"amd_fidelityfx_loader_" + api + L".dll";
         HMODULE module = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
         if (module == nullptr)
             return;
@@ -97,34 +90,19 @@ namespace
 
 namespace fsr
 {
-    void SetLog(LogFunction* log)
+    const Library* LoadFsrLibrary(const wchar_t* api)
     {
-        logFunction = log;
+        std::call_once(loadOnce, Load, api);
+        return library.loaded ? &library : nullptr;
     }
 
-    void LogError(const char* message)
+    int32_t CreateOn(ffxCreateContextDescHeader& backend, const Options& options, void** upscaler)
     {
-        fsr::LogFunction* log = logFunction;
-        if (log != nullptr)
-            log(0, message);
-    }
-
-    int32_t Create(void* device, const Options& options, void** upscaler)
-    {
-        *upscaler = nullptr;
-        std::call_once(loadOnce, Load);
-        if (!library.loaded)
-            return ErrorLibraryMissing;
-
-        ffxCreateBackendDX12Desc backend{};
-        backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
-        backend.device = static_cast<ID3D12Device*>(device);
-
         // Tells the upscaler DLL, or a newer one in the graphics driver, which version of the API these structures
         // come from.
         ffxCreateContextDescUpscaleVersion version{};
         version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE_VERSION;
-        version.header.pNext = &backend.header;
+        version.header.pNext = &backend;
         version.version = FFX_UPSCALER_VERSION;
 
         ffxCreateContextDescUpscale create{};
@@ -140,6 +118,63 @@ namespace fsr
         if (result == FFX_API_RETURN_OK)
             *upscaler = context;
         return static_cast<int32_t>(result);
+    }
+
+    int32_t Dispatch(void* upscaler, const Frame& frame, void* commandList, const FfxApiResource& color,
+        const FfxApiResource& depth, const FfxApiResource& motion, const FfxApiResource& output)
+    {
+        ffxDispatchDescUpscale dispatch{};
+        dispatch.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
+        dispatch.commandList = commandList;
+        dispatch.color = color;
+        dispatch.depth = depth;
+        dispatch.motionVectors = motion;
+        dispatch.output = output;
+        dispatch.jitterOffset = {frame.jitterX, frame.jitterY};
+        // FSR wants the offset to the previous position in render pixels.
+        dispatch.motionVectorScale = {
+            frame.motionScaleX * static_cast<float>(frame.renderWidth),
+            frame.motionScaleY * static_cast<float>(frame.renderHeight),
+        };
+        dispatch.renderSize = {frame.renderWidth, frame.renderHeight};
+        dispatch.upscaleSize = {frame.outputWidth, frame.outputHeight};
+        dispatch.enableSharpening = frame.sharpness > 0.0f;
+        dispatch.sharpness = frame.sharpness;
+        dispatch.frameTimeDelta = frame.frameTime;
+        dispatch.preExposure = 1.0f;
+        dispatch.reset = frame.reset != 0;
+        dispatch.cameraNear = frame.cameraNear;
+        dispatch.cameraFar = frame.cameraFar;
+        dispatch.cameraFovAngleVertical = frame.cameraFovY;
+        dispatch.viewSpaceToMetersFactor = 1.0f;
+        dispatch.flags = frame.flags;
+
+        ffxContext context = upscaler;
+        return static_cast<int32_t>(library.Dispatch(&context, &dispatch.header));
+    }
+
+    void SetLog(LogFunction* log)
+    {
+        logFunction = log;
+    }
+
+    void LogError(const char* message)
+    {
+        fsr::LogFunction* log = logFunction;
+        if (log != nullptr)
+            log(0, message);
+    }
+
+    int32_t Create(void* device, const Options& options, void** upscaler)
+    {
+        *upscaler = nullptr;
+        if (LoadFsrLibrary(L"dx12") == nullptr)
+            return ErrorLibraryMissing;
+
+        ffxCreateBackendDX12Desc backend{};
+        backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
+        backend.device = static_cast<ID3D12Device*>(device);
+        return CreateOn(backend.header, options, upscaler);
     }
 
     Info Describe(void* upscaler)
@@ -193,34 +228,11 @@ namespace fsr
 
     int32_t Evaluate(void* upscaler, const Frame& frame, void* commandList)
     {
-        ffxDispatchDescUpscale dispatch{};
-        dispatch.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
-        dispatch.commandList = commandList;
-        dispatch.color = ToResource(frame.color, FFX_API_RESOURCE_STATE_COMPUTE_READ);
-        dispatch.depth = ToResource(frame.depth, FFX_API_RESOURCE_STATE_COMPUTE_READ);
-        dispatch.motionVectors = ToResource(frame.motion, FFX_API_RESOURCE_STATE_COMPUTE_READ);
-        dispatch.output = ToResource(frame.output, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
-        dispatch.jitterOffset = {frame.jitterX, frame.jitterY};
-        // FSR wants the offset to the previous position in render pixels.
-        dispatch.motionVectorScale = {
-            frame.motionScaleX * static_cast<float>(frame.renderWidth),
-            frame.motionScaleY * static_cast<float>(frame.renderHeight),
-        };
-        dispatch.renderSize = {frame.renderWidth, frame.renderHeight};
-        dispatch.upscaleSize = {frame.outputWidth, frame.outputHeight};
-        dispatch.enableSharpening = frame.sharpness > 0.0f;
-        dispatch.sharpness = frame.sharpness;
-        dispatch.frameTimeDelta = frame.frameTime;
-        dispatch.preExposure = 1.0f;
-        dispatch.reset = frame.reset != 0;
-        dispatch.cameraNear = frame.cameraNear;
-        dispatch.cameraFar = frame.cameraFar;
-        dispatch.cameraFovAngleVertical = frame.cameraFovY;
-        dispatch.viewSpaceToMetersFactor = 1.0f;
-        dispatch.flags = frame.flags;
-
-        ffxContext context = upscaler;
-        return static_cast<int32_t>(library.Dispatch(&context, &dispatch.header));
+        return Dispatch(upscaler, frame, commandList,
+            ToResource(frame.color, FFX_API_RESOURCE_STATE_COMPUTE_READ),
+            ToResource(frame.depth, FFX_API_RESOURCE_STATE_COMPUTE_READ),
+            ToResource(frame.motion, FFX_API_RESOURCE_STATE_COMPUTE_READ),
+            ToResource(frame.output, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS));
     }
 
     int32_t Destroy(void* upscaler)
